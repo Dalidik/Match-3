@@ -1,0 +1,92 @@
+public class Tile : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
+    {
+        public RectTransform RectTransform { get; private set; }
+        public Vector2Int GridPosition { get; set; }
+        public int TypeID { get; set; }
+
+
+        private MatchBoardController _manager;
+        private Vector2Int _swipeDirection;
+        private bool _hasSwipeDirection;
+        private Tween _breathingTween;
+        private Vector2 _startDragPos;
+        private bool _dragging;
+
+
+
+        public void Init(Vector2Int pos, int typeID, MatchBoardController manager)
+        {
+            GridPosition = pos;
+            TypeID = typeID;
+            _manager = manager;
+
+            RectTransform = GetComponent<RectTransform>();
+
+            transform.localScale = Vector3.one;
+            RectTransform.localScale = new Vector3(1.2f, 1.2f, 1f);
+            RectTransform.anchoredPosition3D = Vector3.zero;
+            RectTransform.rotation = Quaternion.identity;
+        }
+
+        public void OnBeginDrag(PointerEventData eventData)
+        {
+            if (_manager == null)
+                return;
+
+
+            _dragging = true;
+            _hasSwipeDirection = false;
+            _startDragPos = eventData.position;
+
+            DOTween.Kill(RectTransform);
+            RectTransform.DOScale(1.3f, 0.15f).SetEase(Ease.OutQuad);
+
+        }
+
+        public void OnDrag(PointerEventData eventData)
+        {
+            if (!_dragging || _manager == null)
+                return;
+
+            var dragDelta = eventData.position - _startDragPos;
+
+            if (!_hasSwipeDirection && dragDelta.magnitude > 15f)
+            {
+                if (Mathf.Abs(dragDelta.x) > Mathf.Abs(dragDelta.y))
+                    _swipeDirection = dragDelta.x > 0 ? Vector2Int.right : Vector2Int.left;
+                else
+                    _swipeDirection = dragDelta.y > 0 ? Vector2Int.down : Vector2Int.up;
+
+                _hasSwipeDirection = true;
+                _dragging = false;
+
+                _manager.OnTileSwiped(this, _swipeDirection);
+
+                RectTransform.DOScale(1.2f, 0.2f).SetEase(Ease.OutBack);
+            }
+        }
+
+        public void OnEndDrag(PointerEventData eventData)
+        {
+            if (!_dragging)
+                return;
+
+            _dragging = false;
+
+            if (!_hasSwipeDirection)
+                RectTransform.DOScale(1.2f, 0.25f)
+                    .SetEase(Ease.OutBack)
+                    .OnComplete(() => { });
+        }
+
+        public void ResetPosition()
+        {
+            RectTransform.DOAnchorPos(Vector2.zero, 0.2f).SetEase(Ease.OutBack);
+        }
+
+        private void OnDestroy()
+        {
+            if (RectTransform != null)
+                RectTransform.DOKill();
+        }
+    }

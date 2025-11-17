@@ -1,0 +1,35 @@
+public class TileEffectManager
+	{
+        private readonly MonoBehaviour _coroutineHost;
+        private readonly RectTransform _boardRectTransform;
+
+        public TileEffectManager(MonoBehaviour coroutineHost, RectTransform boardRect)
+        {
+            _coroutineHost = coroutineHost;
+            _boardRectTransform = boardRect;
+        }
+        
+        public IEnumerator AnimateTileRemoval(Tile tile, float delayBeforeFly = 0.1f)
+        {
+            if (tile == null)
+                yield break;
+
+            var rect = tile.RectTransform;
+
+            if (rect == null)
+                yield break;
+            
+
+            yield return new WaitForSeconds(delayBeforeFly);
+
+            if (tile == null || rect == null || tile.gameObject == null)
+                yield break;
+
+
+            yield return rect.DOScale(0.8f, 0.25f).SetEase(Ease.InBack).WaitForCompletion();
+            if (tile != null)
+                Object.Destroy(tile.gameObject);
+        }
+
+      
+	}

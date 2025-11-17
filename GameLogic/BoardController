@@ -1,0 +1,599 @@
+ public class MatchBoardController : MonoBehaviour
+    {
+        [Header("Board Settings")]
+        [SerializeField] private int _boardWidth = 7; //ширина поля
+        [SerializeField] private int _boardHeight = 7; //высота поля
+        [SerializeField] private GameObject[] _tilePrefabs; //префабы матч 3 обьектов
+        [SerializeField] private List<RectTransform> _cells = new List<RectTransform>(); //ячейки поля
+
+        [SerializeField] private List<int[,]> _spawnPatterns = new List<int[,]>();
+        
+
+        private readonly HashSet<int> _allowedTileIndices = new HashSet<int>();
+        private TileEffectManager _tileEffectManager;
+        private RectTransform _boardRectTransform;
+        private bool _isTutorialMoveRestricted;
+
+        private RectTransform[,] _cellSlots;
+        private TileSpawner _tileSpawner;
+        private Tile[,] _grid;
+
+
+        private bool IsInteractionLocked { get; } = false;
+
+        public enum TutorialState
+        {
+            Step1,
+            Step2,
+            Step3,
+            Step4,
+            Step5,
+            Completed
+        }
+
+        public TutorialState CurrentTutorialState = TutorialState.Step1;
+
+        private void Awake()
+        {
+            if (_cells.Count != _boardWidth * _boardHeight) return;
+
+            _cellSlots = new RectTransform[_boardWidth, _boardHeight];
+            _grid = new Tile[_boardWidth, _boardHeight];
+
+            var index = 0;
+            for (var y = 0; y < _boardHeight; y++)
+            for (var x = 0; x < _boardWidth; x++)
+                _cellSlots[x, y] = _cells[index++];
+
+
+            _tileSpawner = new TileSpawner(this, _tilePrefabs, _cellSlots, _grid);
+            _tileEffectManager = new TileEffectManager(this, _boardRectTransform);
+        }
+
+        private void Start()
+        {
+            _spawnPatterns = SpawnPatterns.GetAllPatterns();
+            CurrentTutorialState = TutorialState.Step1;
+            SetBoardFromPattern(SpawnPatterns.StartPattern);
+        }
+
+        private bool IsInsideBoard(Vector2Int pos)
+        {
+            return pos.x >= 0 && pos.x < _boardWidth && pos.y >= 0 && pos.y < _boardHeight;
+        }
+
+        private void SwapTiles(Tile a, Tile b) //свайп 
+        {
+            var posA = a.GridPosition;
+            var posB = b.GridPosition;
+
+            _grid[posA.x, posA.y] = b;
+            _grid[posB.x, posB.y] = a;
+
+            a.GridPosition = posB;
+            b.GridPosition = posA;
+        }
+
+        private IEnumerator FakeSwipeRoutine(Tile fromTile, Vector2Int direction) //свайп с возвратом для непправильных ходов 
+        {
+            var toPos = fromTile.GridPosition + direction;
+            if (!IsInsideBoard(toPos))
+            {
+                fromTile.ResetPosition();
+                yield break;
+            }
+
+            var toTile = _grid[toPos.x, toPos.y];
+            if (toTile == null)
+            {
+                fromTile.ResetPosition();
+                yield break;
+            }
+
+            var fromStart = fromTile.transform.position;
+            var toStart = toTile.transform.position;
+
+            var duration = 0.15f;
+
+            DOTween.Kill(fromTile.RectTransform);
+            DOTween.Kill(toTile.RectTransform);
+
+            var seq = DOTween.Sequence();
+            seq.Join(fromTile.transform.DOMove(toStart, duration).SetEase(Ease.OutQuad));
+            seq.Join(toTile.transform.DOMove(fromStart, duration).SetEase(Ease.OutQuad));
+            yield return seq.WaitForCompletion();
+
+            var backSeq = DOTween.Sequence();
+            backSeq.Join(fromTile.transform.DOMove(fromStart, duration).SetEase(Ease.InOutQuad));
+            backSeq.Join(toTile.transform.DOMove(toStart, duration).SetEase(Ease.InOutQuad));
+            yield return backSeq.WaitForCompletion();
+
+
+            if (IsTileValid(fromTile))
+                fromTile.ResetPosition();
+            if (IsTileValid(toTile))
+                toTile.ResetPosition();
+        }
+
+        public void OnTileSwiped(Tile fromTile, Vector2Int direction)
+        {
+          
+
+            var toPos = fromTile.GridPosition + direction;
+
+            if (!IsInsideBoard(toPos))
+            {
+                StartCoroutine(FakeSwipeRoutine(fromTile, direction));
+                return;
+            }
+
+            var toTile = _grid[toPos.x, toPos.y];
+            if (toTile == null)
+            {
+                StartCoroutine(FakeSwipeRoutine(fromTile, direction));
+                return;
+            }
+
+            StartCoroutine(SwipeSwapRoutine(fromTile, toTile));
+        }
+
+        private static bool IsTileValid(Tile tile)
+        {
+            return tile != null && tile.gameObject != null;
+        }
+
+        private IEnumerator SwipeSwapRoutine(Tile a, Tile b)
+        {
+            if (!IsTileValid(a) || !IsTileValid(b))
+            {
+                yield break;
+            }
+
+            var posA = a.transform.position;
+            var posB = b.transform.position;
+
+            SwapTiles(a, b);
+
+            a.transform.SetParent(_cellSlots[a.GridPosition.x, a.GridPosition.y], true);
+            b.transform.SetParent(_cellSlots[b.GridPosition.x, b.GridPosition.y], true);
+
+            a.transform.position = posA;
+            b.transform.position = posB;
+
+            DOTween.Kill(a.RectTransform);
+            DOTween.Kill(b.RectTransform);
+
+            var swapSeq = DOTween.Sequence();
+
+            Tween ta = a.RectTransform.DOLocalMove(Vector3.zero, 0.25f).SetEase(Ease.OutBack);
+            Tween tb = b.RectTransform.DOLocalMove(Vector3.zero, 0.25f).SetEase(Ease.OutBack);
+
+            Tween sa = a.RectTransform
+                .DOScale(1.3f, 0.15f)
+                .SetLoops(2, LoopType.Yoyo)
+                .SetEase(Ease.OutQuad);
+
+            Tween sb = b.RectTransform
+                .DOScale(1.3f, 0.15f)
+                .SetLoops(2, LoopType.Yoyo)
+                .SetEase(Ease.OutQuad);
+
+            swapSeq.Join(ta).Join(tb).Join(sa).Join(sb);
+
+            yield return swapSeq.WaitForCompletion();
+
+            a.RectTransform.DOScale(1.2f, 0.1f);
+            b.RectTransform.DOScale(1.2f, 0.1f);
+
+            if (!HasMatches())
+            {
+                DOTween.Kill(a.RectTransform);
+                DOTween.Kill(b.RectTransform);
+
+                var shakeSeq = DOTween.Sequence();
+                yield return shakeSeq.WaitForCompletion();
+
+                SwapTiles(a, b);
+
+                var targetPosA = _cellSlots[a.GridPosition.x, a.GridPosition.y].position;
+                var targetPosB = _cellSlots[b.GridPosition.x, b.GridPosition.y].position;
+
+                var backSeq = DOTween.Sequence();
+
+                Tween moveA = a.transform.DOMove(targetPosA, 0.35f)
+                    .SetEase(Ease.InOutQuad);
+                Tween moveB = b.transform.DOMove(targetPosB, 0.35f)
+                    .SetEase(Ease.InOutQuad);
+
+                backSeq.Join(moveA).Join(moveB);
+                yield return backSeq.WaitForCompletion();
+
+                if (IsTileValid(a))
+                {
+                    a.transform.SetParent(_cellSlots[a.GridPosition.x, a.GridPosition.y], false);
+                    a.RectTransform.anchoredPosition = Vector2.zero;
+                    a.RectTransform.DOScale(1.2f, 0.1f);
+                }
+
+                if (IsTileValid(b))
+                {
+                    b.transform.SetParent(_cellSlots[b.GridPosition.x, b.GridPosition.y], false);
+                    b.RectTransform.anchoredPosition = Vector2.zero;
+                    b.RectTransform.DOScale(1.2f, 0.1f);
+                }
+
+            }
+            else
+            {
+                if (_isTutorialMoveRestricted) ClearMoveRestriction();
+
+                yield return ClearMatchesRoutine();
+            }
+        }
+
+    
+
+        private IEnumerator ClearMatchesRoutine()
+        {
+           
+
+            var tilesToRemove = new List<Tile>();
+            var anyMatch = ClearAllMatches(tilesToRemove);
+
+            if (anyMatch)
+            {
+                yield return new WaitForSeconds(1.05f);
+                FillEmptyTiles();
+            }
+
+        }
+
+        private bool ClearAllMatches(List<Tile> removedTiles)
+        {
+            var matched = new bool[_boardWidth, _boardHeight];
+            var found = false;
+
+            // ---------- Горизонтальные матчи ----------
+            for (var y = 0; y < _boardHeight; y++)
+            {
+                var x = 0;
+                while (x < _boardWidth)
+                {
+                    var startTile = _grid[x, y];
+                    if (startTile == null)
+                    {
+                        x++;
+                        continue;
+                    }
+
+                    var matchCount = 1;
+                    var typeID = startTile.TypeID;
+
+                    while (x + matchCount < _boardWidth &&
+                           _grid[x + matchCount, y] != null &&
+                           _grid[x + matchCount, y].TypeID == typeID)
+                        matchCount++;
+
+                    if (matchCount >= 3)
+                    {
+                        found = true;
+                        for (var i = 0; i < matchCount; i++)
+                            matched[x + i, y] = true;
+                    }
+
+                    x += matchCount;
+                }
+            }
+
+            // ---------- Вертикальные матчи ----------
+            for (var x = 0; x < _boardWidth; x++)
+            {
+                var y = 0;
+                while (y < _boardHeight)
+                {
+                    var startTile = _grid[x, y];
+                    if (startTile == null)
+                    {
+                        y++;
+                        continue;
+                    }
+
+                    var matchCount = 1;
+                    var typeID = startTile.TypeID;
+
+                    while (y + matchCount < _boardHeight &&
+                           _grid[x, y + matchCount] != null &&
+                           _grid[x, y + matchCount].TypeID == typeID)
+                        matchCount++;
+
+                    if (matchCount >= 3)
+                    {
+                        found = true;
+                        for (var i = 0; i < matchCount; i++)
+                            matched[x, y + i] = true;
+                    }
+
+                    y += matchCount;
+                }
+            }
+
+
+            // ---------- Удаление совпавших тайлов ----------
+            for (var x = 0; x < _boardWidth; x++)
+            for (var y = 0; y < _boardHeight; y++)
+                if (matched[x, y] && _grid[x, y] != null)
+                {
+                    var tile = _grid[x, y];
+                    _grid[x, y] = null;
+
+                    if (tile != null)
+                    {
+                        DOTween.Kill(tile.RectTransform);
+                        removedTiles.Add(tile);
+
+                        StartCoroutine(_tileEffectManager.AnimateTileRemoval(tile));
+                    }
+                }
+
+            return found;
+        }
+
+        private void FillEmptyTiles() //заполнение пустых мест новыми тайлами
+        {
+            if (IsInteractionLocked)
+                return;
+
+            var allTweens = new List<Tween>();
+
+
+            for (var x = 0; x < _boardWidth; x++)
+            for (var y = 0; y < _boardHeight; y++)
+                if (_grid[x, y] != null && _grid[x, y].gameObject == null)
+                    _grid[x, y] = null;
+
+
+            for (var x = 0; x < _boardWidth; x++)
+            {
+                var tilesInColumn = new List<(Tile tile, int oldY)>();
+                for (var y = _boardHeight - 1; y >= 0; y--)
+                    if (_grid[x, y] != null)
+                        tilesInColumn.Add((_grid[x, y], y));
+
+                for (var y = 0; y < _boardHeight; y++)
+                    _grid[x, y] = null;
+
+                var fillY = _boardHeight - 1;
+
+                foreach (var (tile, oldY) in tilesInColumn)
+                {
+                    if (fillY < 0)
+                        break;
+
+                    var isFalling = fillY != oldY;
+                    tile.GridPosition = new Vector2Int(x, fillY);
+                    _grid[x, fillY] = tile;
+                    tile.transform.SetParent(_cellSlots[x, fillY], false);
+
+                    if (isFalling)
+                    {
+                        var rt = tile.RectTransform;
+                        rt.anchoredPosition = new Vector2(0, 150f);
+                        Tween posTween = rt.DOAnchorPos(Vector2.zero, 0.4f)
+                            .SetEase(Ease.OutElastic)
+                            .SetDelay(Random.Range(0f, 0.05f));
+                        allTweens.Add(posTween);
+                    }
+
+                    fillY--;
+                }
+
+                for (var y = fillY; y >= 0; y--)
+                {
+                    var typeID = Random.Range(0, _tilePrefabs.Length);
+
+                    var moveIndex = GameManager.Instance.MoveIndex;
+                    if (_spawnPatterns != null && _spawnPatterns.Count > 0)
+                    {
+                        var patternIndex = Mathf.Clamp(moveIndex - 1, 0, _spawnPatterns.Count - 1);
+                        var pattern = _spawnPatterns[patternIndex];
+                        if (y < pattern.GetLength(0) && x < pattern.GetLength(1))
+                            typeID = pattern[y, x];
+                    }
+
+                    _tileSpawner.SpawnTileAt(x, y, typeID, false);
+
+                    var tile = _grid[x, y];
+                    if (tile == null) continue;
+
+                    var rt = tile.RectTransform;
+                    rt.anchoredPosition = new Vector2(0, 200f);
+
+                    var fadeGroup = tile.GetComponent<CanvasGroup>();
+                    if (fadeGroup == null)
+                        if (tile.RectTransform != null)
+                        {
+                            fadeGroup = tile.gameObject.AddComponent<CanvasGroup>();
+                            fadeGroup.alpha = 0f;
+                        }
+
+                    Tween fallTween = rt.DOAnchorPos(Vector2.zero, 0.4f)
+                        .SetEase(Ease.OutElastic)
+                        .SetDelay(0.05f);
+
+                    Tween fadeTween = null;
+                    if (fadeGroup != null)
+                    {
+                        fadeTween = fadeGroup.DOFade(1f, 0.3f);
+                    }
+                    else
+                    {
+                        var img = tile.GetComponent<Image>();
+                        if (img != null)
+                        {
+                            img.color = new Color(img.color.r, img.color.g, img.color.b, 0f);
+                            fadeTween = img.DOFade(1f, 0.3f);
+                        }
+                    }
+
+                    allTweens.Add(fallTween);
+                    if (fadeTween != null)
+                        allTweens.Add(fadeTween);
+                }
+            }
+
+            if (allTweens.Count > 0)
+            {
+                var seq = DOTween.Sequence();
+                foreach (var t in allTweens)
+                    seq.Join(t);
+                StartCoroutine(WaitForFilling(seq));
+            }
+            else
+            {
+                if (HasMatches()) StartCoroutine(ClearMatchesRoutine());
+            }
+        }
+
+        private IEnumerator WaitForFilling(Sequence seq)
+        {
+            yield return seq.WaitForCompletion();
+
+            yield return new WaitForSeconds(0.1f);
+
+            if (!HasMatches()) yield break;
+            StartCoroutine(ClearMatchesRoutine());
+        }
+
+        private bool HasMatches()
+        {
+            for (var y = 0; y < _boardHeight; y++)
+            for (var x = 0; x < _boardWidth - 2; x++)
+                if (_grid[x, y] != null && _grid[x + 1, y] != null && _grid[x + 2, y] != null)
+                {
+                    var id = _grid[x, y].TypeID;
+                    if (_grid[x + 1, y].TypeID == id && _grid[x + 2, y].TypeID == id)
+                        return true;
+                }
+
+            for (var x = 0; x < _boardWidth; x++)
+            for (var y = 0; y < _boardHeight - 2; y++)
+                if (_grid[x, y] != null && _grid[x, y + 1] != null && _grid[x, y + 2] != null)
+                {
+                    var id = _grid[x, y].TypeID;
+                    if (_grid[x, y + 1].TypeID == id && _grid[x, y + 2].TypeID == id)
+                        return true;
+                }
+
+            //  2x2 
+            for (var x = 0; x < _boardWidth - 1; x++)
+            for (var y = 0; y < _boardHeight - 1; y++)
+            {
+                var t1 = _grid[x, y];
+                var t2 = _grid[x + 1, y];
+                var t3 = _grid[x, y + 1];
+                var t4 = _grid[x + 1, y + 1];
+
+                if (t1 == null || t2 == null || t3 == null || t4 == null)
+                    continue;
+
+                var id = t1.TypeID;
+                if (t2.TypeID == id && t3.TypeID == id && t4.TypeID == id)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private IEnumerator CheckAndShuffleRoutine()
+        {
+            yield return new WaitForSeconds(0.2f);
+
+            while (!HasPossibleMoves()) yield return new WaitForSeconds(0.3f);
+        }
+
+        private bool HasPossibleMoves()
+        {
+            for (var x = 0; x < _boardWidth; x++)
+            for (var y = 0; y < _boardHeight; y++)
+            {
+                var current = _grid[x, y];
+                if (current == null) continue;
+
+                Vector2Int[] directions =
+                {
+                    Vector2Int.right,
+                    Vector2Int.up
+                };
+
+                foreach (var dir in directions)
+                {
+                    var newX = x + dir.x;
+                    var newY = y + dir.y;
+
+                    if (!IsInsideBoard(new Vector2Int(newX, newY)))
+                        continue;
+
+                    var neighbor = _grid[newX, newY];
+                    if (neighbor == null) continue;
+
+                    SwapTiles(current, neighbor);
+
+                    if (HasMatches())
+                    {
+                        SwapTiles(current, neighbor);
+                        return true;
+                    }
+
+                    SwapTiles(current, neighbor);
+                }
+            }
+
+            return false;
+        }
+
+        private void SetBoardFromPattern(int[,] pattern)
+        {
+            if (pattern.GetLength(0) != _boardHeight || pattern.GetLength(1) != _boardWidth)
+            {
+                Debug.LogError($"Pattern size {pattern.GetLength(0)}x{pattern.GetLength(1)} doesn't match board {_boardHeight}x{_boardWidth}!");
+                return;
+            }
+
+            for (var x = 0; x < _boardWidth; x++)
+            for (var y = 0; y < _boardHeight; y++)
+            {
+                if (_grid[x, y] != null)
+                {
+                    DOTween.Kill(_grid[x, y].RectTransform);
+                    Destroy(_grid[x, y].gameObject);
+                    _grid[x, y] = null;
+                }
+
+                var cell = _cellSlots[x, y];
+                for (var i = cell.childCount - 1; i >= 0; i--)
+                    Destroy(cell.GetChild(i).gameObject);
+            }
+
+            for (var y = 0; y < _boardHeight; y++)
+            for (var x = 0; x < _boardWidth; x++)
+            {
+                var typeID = pattern[y, x];
+
+                if (typeID < 0 || typeID >= _tilePrefabs.Length)
+                    typeID = 0;
+
+                _tileSpawner.SpawnTileAt(x, y, typeID, false);
+            }
+
+            StartCoroutine(CheckAndShuffleRoutine());
+        }
+
+        private void ClearMoveRestriction()
+        {
+            _isTutorialMoveRestricted = false;
+            _allowedTileIndices.Clear();
+        }
+    }
+}
+
+

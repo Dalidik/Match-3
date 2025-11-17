@@ -1,0 +1,60 @@
+public class TileSpawner
+	{
+		private readonly MatchBoardController _board;
+		private readonly RectTransform[,] _cellSlots;
+		private readonly GameObject[] _tilePrefabs;
+		private readonly Tile[,] _grid;
+
+		public TileSpawner(MatchBoardController board, GameObject[] tilePrefabs, RectTransform[,] cellSlots, Tile[,] grid)
+		{
+			_board = board;
+			_tilePrefabs = tilePrefabs;
+			_cellSlots = cellSlots;
+			_grid = grid;
+		}
+
+		public Tile SpawnTileAt(int x, int y, int typeID, bool animate = true)
+		{
+			if (_cellSlots[x, y] == null)
+				return null;
+
+			if (_grid[x, y] != null)
+			{
+				if (_grid[x, y].gameObject == null)
+					_grid[x, y] = null;
+				else
+					return _grid[x, y];
+			}
+
+			var prefab = _tilePrefabs[Mathf.Clamp(typeID, 0, _tilePrefabs.Length - 1)];
+			var obj = GameObject.Instantiate(prefab, animate ? _board.transform : _cellSlots[x, y], false);
+			var tile = obj.GetComponent<Tile>();
+			
+			tile.Init(new Vector2Int(x, y), typeID, _board);
+			_grid[x, y] = tile;
+
+			var rt = tile.RectTransform;
+
+			rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+			rt.localScale = new Vector3(1.2f, 1.2f, 1.2f);
+
+			if (animate)
+			{
+				rt.localScale = Vector3.zero;
+				rt.DOScale(1.2f, 0.3f)
+					.SetEase(Ease.OutElastic)
+					.OnComplete(() =>
+					{
+						tile.transform.SetParent(_cellSlots[x, y], false);
+						rt.anchoredPosition = Vector2.zero;
+					});
+			}
+			else
+			{
+				tile.transform.SetParent(_cellSlots[x, y], false);
+				rt.anchoredPosition = Vector2.zero;
+			}
+
+			return tile;
+		}
+	}
